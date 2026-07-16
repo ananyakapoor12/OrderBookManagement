@@ -2,7 +2,21 @@
 
 ## Objective
 
-This is a lightweight prototype of a hedge fund Order Management System (OMS) built in Python. It demonstrates a simplified trade order workflow from creation through execution, with basic post-trade reporting and reconciliation. The goal is to illustrate system design thinking, lifecycle state management, and operational controls — not to replicate a production system.
+This repository contains a lightweight prototype of a hedge fund Order Management System (OMS) built in Python. The prototype focuses on the core workflow requested in the exercise: order capture, validation, routing, simulated execution handling, post-trade reporting, and reconciliation.
+
+The intent is to demonstrate clear system design, disciplined workflow modelling, and pragmatic implementation choices rather than to reproduce a full production OMS.
+
+## Scope Summary
+
+The prototype covers the following capabilities:
+
+- Order creation through an HTTP API
+- Validation of required fields and basic trading constraints
+- Explicit order lifecycle management
+- Simulated venue responses for fill, partial fill, and rejection outcomes
+- Execution persistence and position updates
+- Trade-file generation, position reporting, and reconciliation checks
+- Idempotent order submission and a full audit trail
 
 ---
 
@@ -23,7 +37,7 @@ This is a lightweight prototype of a hedge fund Order Management System (OMS) bu
 └─────────────────────────────────────────┘
 ```
 
-Dependencies point **downward only**: the API knows about the service, the service knows about core + infra. Core knows nothing about infra or API. This makes each layer independently testable.
+Dependencies point **downward only**: the API depends on the service layer, the service layer depends on core logic and infrastructure, and the core layer is isolated from HTTP and storage concerns. This separation keeps the code easy to test and makes the workflow easier to explain.
 
 ### Technology choices
 
@@ -35,6 +49,15 @@ Dependencies point **downward only**: the API knows about the service, the servi
 | State machine | Hand-written transition table | Explicit, readable, trivially testable |
 | Persistence | sqlite3 (stdlib) | No ORM overhead; SQL is transparent |
 | Testing | Pytest | Industry standard; each test gets an isolated DB via `tmp_path` |
+
+### Design rationale
+
+The implementation deliberately favors explicitness over abstraction:
+
+- The order state machine is hand-written so legal transitions are easy to inspect.
+- The repository layer centralises all SQL access so business logic is not mixed with persistence.
+- The service layer owns workflow orchestration, making the lifecycle readable from a single place.
+- SQLite keeps the prototype self-contained while still allowing a realistic relational schema.
 
 ---
 
@@ -106,7 +129,7 @@ stateDiagram-v2
 
 ### Transition rules
 
-Implemented in `app/core/state_machine.py` as an explicit allowlist. Any transition not in the table raises `IllegalTransitionError` immediately — there is no way to accidentally corrupt order state.
+The transition rules are implemented in `app/core/state_machine.py` as an explicit allowlist. Any transition not in the table raises `IllegalTransitionError` immediately, which prevents silent corruption of lifecycle state.
 
 ---
 
@@ -173,11 +196,11 @@ Every state transition and business event is written here.
 
 ### 1 — Idempotent order submission
 
-Submitting two requests with the same `client_order_id` returns the original order without creating a duplicate. A `DUPLICATE_DETECTED` audit event is written so operations can see the retry. This prevents double-fills from network retries, UI double-clicks, or at-least-once message delivery.
+Submitting two requests with the same `client_order_id` returns the original order without creating a duplicate. The first submission returns `201 Created`; any duplicate idempotent submission returns `200 OK` with the existing order. A `DUPLICATE_DETECTED` audit event is also written so the retry is visible operationally.
 
 ### 2 — Full audit trail
 
-Every lifecycle event is persisted to `audit_events`. The `GET /orders/{order_id}/events` endpoint exposes the complete event timeline for any order. In production this is essential for:
+Every lifecycle event is persisted to `audit_events`. The `GET /orders/{order_id}/events` endpoint exposes the complete timeline for any order. In production, this is important for:
 - Compliance and regulatory reporting
 - Operations debugging ("why is this order stuck?")
 - Client dispute resolution
@@ -190,7 +213,7 @@ Every lifecycle event is persisted to `audit_events`. The `GET /orders/{order_id
 
 Exports all execution records to a timestamped CSV. Each row is one execution event. Columns include execution ID, order ID, client order ID, symbol, side, executed quantity, price, notional value, venue, liquidity flag, and timestamp.
 
-In production this file would be PGP-encrypted and delivered to the prime broker over SFTP, or submitted via a FIX drop-copy session.
+In a production setting, this file would typically be transformed into the specific format required by the prime broker or administrator, encrypted, and transmitted over a secure channel such as SFTP or FIX drop copy.
 
 ### Position report (`GET /reports/positions`)
 
@@ -208,7 +231,7 @@ Two checks run against every FILLED or PARTIALLY_FILLED order:
 1. **filled_quantity vs executions**: confirms that `orders.filled_quantity` equals the sum of `executions.exec_quantity` for that order. A mismatch indicates a data integrity bug.
 2. **FILLED status vs full quantity**: confirms that a FILLED order has `filled_quantity == quantity`. A FILLED order with a residual is an unacceptable break.
 
-Returns an overall PASS/FAIL verdict plus a per-order row with details. In production you would also reconcile against the prime broker's execution report (give-up matching) and the custodian's settlement records.
+The endpoint returns an overall PASS/FAIL verdict plus a per-order breakdown. In production, this control would typically be extended to reconcile against external broker confirms, custodian records, settlement files, commissions, and fees.
 
 ---
 
@@ -260,6 +283,16 @@ GET  /reports/positions                 Current position book
 POST /reports/reconcile                 Run reconciliation checks
 ```
 
+## Example Workflow
+
+At a high level, the intended sequence is:
+
+1. Submit an order through `POST /orders/`
+2. Route the order with `POST /orders/{id}/send`
+3. Inspect lifecycle and execution history through the order and event endpoints
+4. Review resulting positions
+5. Generate trade files and run reconciliation checks
+
 ### Sample workflow (curl)
 
 ```bash
@@ -310,7 +343,7 @@ curl -s -X POST http://localhost:8000/orders/ \
 ```
 
 Expected talking point:
-The order is accepted, persisted, and starts in `NEW` status.
+The order is accepted, persisted, and enters the `NEW` state.
 
 3. Route it with partial-fill behavior.
 
@@ -319,7 +352,7 @@ curl -s -X POST "http://localhost:8000/orders/<ORDER_ID>/send?simulate_mode=PART
 ```
 
 Expected talking point:
-The simulator emits two fills, so the order moves `NEW -> SENT -> PARTIALLY_FILLED -> FILLED`.
+The simulated venue emits two executions, so the lifecycle progresses `NEW -> SENT -> PARTIALLY_FILLED -> FILLED`.
 
 4. Show the audit trail.
 
@@ -328,7 +361,7 @@ curl -s http://localhost:8000/orders/<ORDER_ID>/events | python3 -m json.tool
 ```
 
 Expected talking point:
-Every lifecycle step is recorded, which is useful for operations and compliance.
+Each lifecycle event is captured in the audit trail, supporting operational transparency and compliance review.
 
 5. Show the resulting position book.
 
@@ -337,7 +370,7 @@ curl -s http://localhost:8000/reports/positions | python3 -m json.tool
 ```
 
 Expected talking point:
-Executed trades update the internal net position for each symbol.
+Each execution updates the internal position book for the relevant symbol.
 
 6. Run reconciliation.
 
@@ -346,7 +379,7 @@ curl -s -X POST http://localhost:8000/reports/reconcile | python3 -m json.tool
 ```
 
 Expected talking point:
-The reconciliation report confirms internal order totals match execution totals.
+The reconciliation output confirms that stored execution totals match the order-level fill totals.
 
 7. Demonstrate idempotency by submitting the same client order ID again.
 
@@ -357,7 +390,7 @@ curl -s -X POST http://localhost:8000/orders/ \
 ```
 
 Expected talking point:
-The API returns the existing order instead of creating a duplicate.
+The API returns the existing order with `200 OK` rather than creating a duplicate order.
 
 8. Demonstrate validation failure.
 
@@ -368,7 +401,7 @@ curl -s -X POST http://localhost:8000/orders/ \
 ```
 
 Expected talking point:
-Invalid input is rejected immediately at the API boundary.
+Invalid input is rejected at the API boundary before it can enter the workflow.
 
 9. Generate the trade file.
 
@@ -377,7 +410,7 @@ curl -OJ -X POST http://localhost:8000/reports/trade-file
 ```
 
 Expected talking point:
-This CSV is the prototype version of the file a prime broker or fund administrator would ingest.
+The generated CSV represents the prototype form of a downstream trade file consumed by a prime broker or fund administrator.
 
 ---
 
@@ -397,14 +430,25 @@ This CSV is the prototype version of the file a prime broker or fund administrat
 | Resilience | None | Retry with exponential backoff, circuit breaker around venue APIs |
 | Deployment | Local uvicorn | Containerised (Docker), deployed to Kubernetes (AKS/EKS) |
 
+## Production Extension Path
+
+If this prototype were extended into a fuller OMS service, the next priorities would be:
+
+- Real venue integration through FIX or broker APIs
+- Authentication, authorisation, and user-level auditability
+- Cancel and amend flows
+- Stronger pre-trade risk controls
+- Multi-currency and fee handling
+- Scheduled end-of-day reporting and reconciliation jobs
+
 ---
 
 ## Known Limitations
 
-- No real market connectivity — all venue responses are simulated
-- No authentication or authorisation
-- SQLite is not suitable for concurrent multi-user production workloads
-- Position accounting uses simplified netting; no tax lot method
-- No cancel/amend order flow
-- Market prices are not available; position notionals use average fill price as a placeholder
-- No currency handling (assumes single-currency)
+- No real market connectivity; all venue responses are simulated
+- No authentication or authorisation layer
+- SQLite is used for convenience and is not intended for concurrent production workloads
+- Position accounting uses simplified netting rather than full tax-lot logic
+- Cancel and amend workflows are intentionally out of scope
+- Position notionals use average fill price as a placeholder because market data is not integrated
+- The model assumes a single-currency environment and does not include commissions or fees
