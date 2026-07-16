@@ -22,7 +22,7 @@ from typing import Optional
 from app.core.enums import OrderStatus, OrderSide, SimulationMode, EventType
 from app.core.state_machine import transition, IllegalTransitionError
 from app.core.validators import validate_order, ValidationError
-from app.domain.models import Order, Execution
+from app.domain.models import Order, Execution, CreateOrderResult
 from app.domain.schemas import CreateOrderRequest
 from app.infra import repository
 from app.infra.venue_simulator import simulate_venue_response
@@ -37,6 +37,11 @@ def _now() -> str:
 # ---------------------------------------------------------------------------
 
 def create_order(req: CreateOrderRequest) -> Order:
+    """Backward-compatible helper used by existing service tests and callers."""
+    return create_order_with_result(req).order
+
+
+def create_order_with_result(req: CreateOrderRequest) -> CreateOrderResult:
     """
     Create a new order.
 
@@ -54,7 +59,7 @@ def create_order(req: CreateOrderRequest) -> Order:
             event_type=EventType.DUPLICATE_DETECTED.value,
             details=f"Duplicate submission detected for client_order_id={req.client_order_id!r}",
         )
-        return existing
+        return CreateOrderResult(order=existing, created=False)
 
     # --- Validation ---
     try:
@@ -100,7 +105,7 @@ def create_order(req: CreateOrderRequest) -> Order:
         ),
     )
 
-    return order
+    return CreateOrderResult(order=order, created=True)
 
 
 # ---------------------------------------------------------------------------

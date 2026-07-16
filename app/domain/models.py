@@ -59,3 +59,10 @@ class AuditEvent:
     to_status: Optional[str]
     details: Optional[str]
     created_at: str
+
+
+@dataclass
+class CreateOrderResult:
+    """Wraps an order with metadata about whether it was newly created."""
+    order: Order
+    created: bool

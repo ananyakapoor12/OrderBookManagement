@@ -12,7 +12,7 @@ GET    /orders/{order_id}/executions  All execution fills for an order
 """
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Response, status
 
 from app.core.enums import SimulationMode
 from app.core.state_machine import IllegalTransitionError
@@ -57,13 +57,17 @@ def _order_to_response(order) -> schemas.OrderResponse:
     summary="Create a new order",
     description=(
         "Creates a new order in NEW status. "
-        "Submitting the same `client_order_id` twice returns the original order (idempotent)."
+        "Submitting the same `client_order_id` twice returns the original order (idempotent) "
+        "with HTTP 200 instead of creating a duplicate."
     ),
 )
-def create_order(req: schemas.CreateOrderRequest):
+def create_order(req: schemas.CreateOrderRequest, response: Response):
     try:
-        order = service.create_order(req)
-        return _order_to_response(order)
+        result = service.create_order_with_result(req)
+        response.status_code = (
+            status.HTTP_201_CREATED if result.created else status.HTTP_200_OK
+        )
+        return _order_to_response(result.order)
     except ValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
