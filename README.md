@@ -291,6 +291,94 @@ curl -s -X POST http://localhost:8000/orders/ \
   -d '{"client_order_id":"bad-001","symbol":"123invalid","side":"HOLD","quantity":-5,"price":0}' | python3 -m json.tool
 ```
 
+### Demo script
+
+Use this sequence for a short live walkthrough in front of reviewers.
+
+1. Start the server.
+
+```bash
+uvicorn app.main:app --reload
+```
+
+2. Create a clean demo order.
+
+```bash
+curl -s -X POST http://localhost:8000/orders/ \
+  -H "Content-Type: application/json" \
+  -d '{"client_order_id":"demo-001","symbol":"AAPL","side":"BUY","quantity":100,"price":185.50}' | python3 -m json.tool
+```
+
+Expected talking point:
+The order is accepted, persisted, and starts in `NEW` status.
+
+3. Route it with partial-fill behavior.
+
+```bash
+curl -s -X POST "http://localhost:8000/orders/<ORDER_ID>/send?simulate_mode=PARTIAL_THEN_FILL" | python3 -m json.tool
+```
+
+Expected talking point:
+The simulator emits two fills, so the order moves `NEW -> SENT -> PARTIALLY_FILLED -> FILLED`.
+
+4. Show the audit trail.
+
+```bash
+curl -s http://localhost:8000/orders/<ORDER_ID>/events | python3 -m json.tool
+```
+
+Expected talking point:
+Every lifecycle step is recorded, which is useful for operations and compliance.
+
+5. Show the resulting position book.
+
+```bash
+curl -s http://localhost:8000/reports/positions | python3 -m json.tool
+```
+
+Expected talking point:
+Executed trades update the internal net position for each symbol.
+
+6. Run reconciliation.
+
+```bash
+curl -s -X POST http://localhost:8000/reports/reconcile | python3 -m json.tool
+```
+
+Expected talking point:
+The reconciliation report confirms internal order totals match execution totals.
+
+7. Demonstrate idempotency by submitting the same client order ID again.
+
+```bash
+curl -s -X POST http://localhost:8000/orders/ \
+  -H "Content-Type: application/json" \
+  -d '{"client_order_id":"demo-001","symbol":"AAPL","side":"BUY","quantity":100,"price":185.50}' | python3 -m json.tool
+```
+
+Expected talking point:
+The API returns the existing order instead of creating a duplicate.
+
+8. Demonstrate validation failure.
+
+```bash
+curl -s -X POST http://localhost:8000/orders/ \
+  -H "Content-Type: application/json" \
+  -d '{"client_order_id":"bad-001","symbol":"123invalid","side":"BUY","quantity":100,"price":0}' | python3 -m json.tool
+```
+
+Expected talking point:
+Invalid input is rejected immediately at the API boundary.
+
+9. Generate the trade file.
+
+```bash
+curl -OJ -X POST http://localhost:8000/reports/trade-file
+```
+
+Expected talking point:
+This CSV is the prototype version of the file a prime broker or fund administrator would ingest.
+
 ---
 
 ## How This Scales to Production
