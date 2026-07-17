@@ -264,6 +264,34 @@ Interactive API docs: `http://localhost:8000/docs`
 pytest tests/ -v
 ```
 
+### Run the CLI
+
+The CLI is the easiest way to demonstrate the workflow without switching to a browser or API client.
+
+```bash
+python -m app
+```
+
+You can also run the module directly:
+
+```bash
+python -m app.cli
+```
+
+Available commands:
+
+- `create` - create a new order
+- `send` - send an order to the simulated venue
+- `list` - list all orders
+- `get` - fetch one order by id
+- `events` - show the audit trail for an order
+- `executions` - show execution fills for an order
+- `positions` - show the current position book
+- `reconcile` - run reconciliation checks
+- `trade-file` - generate the trade file CSV
+
+If you run the CLI without a subcommand, it opens an interactive menu and prompts for the required values step by step.
+
 ---
 
 ## API Quick Reference
