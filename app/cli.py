@@ -18,7 +18,10 @@ import os
 from dataclasses import asdict, is_dataclass
 from typing import Any, Callable, Optional
 
+from pydantic import ValidationError as PydanticValidationError
+
 from app.core.enums import OrderSide, SimulationMode
+from app.core.state_machine import IllegalTransitionError
 from app.core.validators import ValidationError
 from app.domain.schemas import CreateOrderRequest
 from app.domain.service import create_order_with_result, send_order
@@ -91,6 +94,15 @@ def _handle_validation_error(exc: ValidationError) -> int:
     return 1
 
 
+def _handle_pydantic_validation_error(exc: PydanticValidationError) -> int:
+    print("Validation failed:")
+    for error in exc.errors():
+        location = ".".join(str(part) for part in error.get("loc", ()))
+        message = error.get("msg", "Invalid input")
+        print(f"- {location}: {message}" if location else f"- {message}")
+    return 1
+
+
 def cmd_create(args: argparse.Namespace) -> int:
     try:
         req = CreateOrderRequest(
@@ -102,6 +114,8 @@ def cmd_create(args: argparse.Namespace) -> int:
             venue=args.venue,
         )
         result = create_order_with_result(req)
+    except PydanticValidationError as exc:
+        return _handle_pydantic_validation_error(exc)
     except ValidationError as exc:
         return _handle_validation_error(exc)
 
@@ -113,6 +127,10 @@ def cmd_create(args: argparse.Namespace) -> int:
 def cmd_send(args: argparse.Namespace) -> int:
     try:
         order = send_order(args.order_id, args.simulate_mode)
+    except IllegalTransitionError as exc:
+        print(f"Error: {exc}")
+        print("Tip: choose a NEW order that has not already been sent or filled.")
+        return 1
     except Exception as exc:  # noqa: BLE001 - CLI should surface the message cleanly
         print(f"Error: {exc}")
         return 1
@@ -253,24 +271,18 @@ def interactive_menu() -> int:
 
 
 def _interactive_create_order() -> int:
-    args = argparse.Namespace(
-        client_order_id=_prompt("Client order id"),
-        symbol=_prompt("Symbol").upper(),
-        side=_prompt_enum("Side", OrderSide, OrderSide.BUY.value),
-        quantity=_prompt_int("Quantity"),
-        price=_prompt_float("Price"),
-        venue=_prompt("Venue", "SIMULATED_EXCHANGE"),
-    )
     try:
         req = CreateOrderRequest(
-            client_order_id=args.client_order_id,
-            symbol=args.symbol,
-            side=args.side,
-            quantity=args.quantity,
-            price=args.price,
-            venue=args.venue,
+            client_order_id=_prompt("Client order id"),
+            symbol=_prompt("Symbol").upper(),
+            side=_prompt_enum("Side", OrderSide, OrderSide.BUY.value),
+            quantity=_prompt_int("Quantity"),
+            price=_prompt_float("Price"),
+            venue=_prompt("Venue", "SIMULATED_EXCHANGE"),
         )
         result = create_order_with_result(req)
+    except PydanticValidationError as exc:
+        return _handle_pydantic_validation_error(exc)
     except ValidationError as exc:
         return _handle_validation_error(exc)
     print("Order created" if result.created else "Existing order returned")
