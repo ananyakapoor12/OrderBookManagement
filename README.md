@@ -290,7 +290,39 @@ Available commands:
 - `reconcile` - run reconciliation checks
 - `trade-file` - generate the trade file CSV
 
-If you run the CLI without a subcommand, it opens an interactive menu and prompts for the required values step by step.
+Command usage reference:
+
+```bash
+# Create
+python -m app create \
+  --client-order-id demo-cli-001 \
+  --symbol AAPL \
+  --side BUY \
+  --quantity 100 \
+  --price 185.5 \
+  --venue SIMULATED_EXCHANGE
+
+# Send (simulate_mode: FULL_FILL | PARTIAL_THEN_FILL | REJECT | RANDOM)
+python -m app send <ORDER_ID> --simulate-mode PARTIAL_THEN_FILL
+
+# Query
+python -m app list
+python -m app get <ORDER_ID>
+python -m app events <ORDER_ID>
+python -m app executions <ORDER_ID>
+
+# Reports
+python -m app positions
+python -m app reconcile
+python -m app trade-file
+```
+
+CLI runtime behavior:
+
+- Running `python -m app` with no subcommand opens an interactive menu.
+- Validation errors are printed as a full list (both schema-level and business-rule errors).
+- Duplicate `client_order_id` submissions return the existing order instead of creating a new one.
+- Trying to send an order from an invalid state (for example already `FILLED`) prints a clear transition error and guidance.
 
 ---
 
